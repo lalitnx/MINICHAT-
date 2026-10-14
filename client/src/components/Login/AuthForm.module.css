@@ -1,0 +1,117 @@
+.formContainer {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  padding: 1rem;
+}
+
+.formCard {
+  background: var(--bg-surface, #12121e);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
+  border-radius: 20px;
+  padding: 2.5rem;
+  width: 100%;
+  max-width: 420px;
+  box-shadow: var(--shadow-lg, 0 8px 32px 0 rgba(0, 0, 0, 0.3));
+}
+
+.title {
+  color: var(--text-primary, #ffffff);
+  font-size: 1.75rem;
+  font-weight: 600;
+  text-align: center;
+  margin-bottom: 2rem;
+  margin-top: 0;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.inputGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.inputGroup label {
+  color: var(--text-secondary, #9ca3af);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.inputGroup input {
+  background: var(--bg-elevated, #1a1a2e);
+  border: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  color: var(--text-primary, #ffffff);
+  font-size: 1rem;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.inputGroup input:focus {
+  border-color: var(--accent-primary, #a78bfa);
+  box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.2);
+}
+
+.inputGroup input::placeholder {
+  color: rgba(156, 163, 175, 0.5);
+}
+
+.submitBtn {
+  background: var(--accent-primary, #a78bfa);
+  color: var(--bg-primary, #111827);
+  border: none;
+  border-radius: 8px;
+  padding: 0.875rem;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 0.5rem;
+  transition: opacity 0.2s, transform 0.1s;
+}
+
+.submitBtn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.submitBtn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.submitBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.toggleText {
+  margin-top: 1.5rem;
+  text-align: center;
+  color: var(--text-secondary, #9ca3af);
+  font-size: 0.875rem;
+}
+
+.toggleBtn {
+  background: none;
+  border: none;
+  color: var(--accent-primary, #a78bfa);
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0;
+  font-size: 0.875rem;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.toggleBtn:hover {
+  color: var(--accent-hover, #8b5cf6);
+}
