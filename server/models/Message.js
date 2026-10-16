@@ -107,6 +107,20 @@ const messageSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+
+    // AI Chatbot fields (for Nova AI responses)
+    isAi: {
+      type: Boolean,
+      default: false,
+    },
+
+    // Web search grounding citations from Google Search
+    groundingSources: [
+      {
+        title: { type: String, default: '' },
+        url: { type: String, default: '' },
+      },
+    ],
   },
   {
     timestamps: true,

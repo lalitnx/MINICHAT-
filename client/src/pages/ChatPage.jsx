@@ -10,6 +10,7 @@ import VoiceRecorder from '../components/Chat/VoiceRecorder';
 import PaymentModal from '../components/Chat/PaymentModal';
 import CallModal from '../components/Chat/CallModal';
 import ThemeToggle from '../components/Common/ThemeToggle';
+import FormattedText from '../components/Chat/FormattedText';
 import styles from './ChatPage.module.css';
 
 export default function ChatPage() {
@@ -45,6 +46,12 @@ export default function ChatPage() {
   // Auto-scroll ref
   const messagesEndRef = useRef(null);
 
+  // Synchronized refs to avoid stale closures in socket handlers
+  const activeConversationRef = useRef(activeConversation);
+  activeConversationRef.current = activeConversation;
+  const userRef = useRef(user);
+  userRef.current = user;
+
   // Expiry timer tick (forces re-render every second to update countdowns)
   const [, setTick] = useState(0);
 
@@ -71,6 +78,14 @@ export default function ChatPage() {
 
   // ─── 2. Socket Listeners for Online Presence, Messages & Calls ──────
   useEffect(() => {
+    const handleConnect = () => {
+      const activeConv = activeConversationRef.current;
+      if (activeConv?._id) {
+        socket.emit('join_conversation', { conversationId: activeConv._id });
+      }
+      socket.emit('get_online_users');
+    };
+
     const handleOnlineUsers = ({ userIds }) => {
       setOnlineUsers(new Set(userIds));
     };
@@ -88,23 +103,49 @@ export default function ChatPage() {
     };
 
     const handleReceiveMessage = (newMessage) => {
-      if (activeConversation && newMessage.conversationId === activeConversation._id) {
+      const activeConv = activeConversationRef.current;
+      const activeConvId = (activeConv?._id || activeConv?.id)?.toString();
+      const msgConvId = (newMessage?.conversationId?._id || newMessage?.conversationId)?.toString();
+
+      if (activeConvId && msgConvId === activeConvId) {
+        setPartnerTyping(false);
         setMessages((prev) => {
-          if (prev.some((m) => m._id === newMessage._id)) return prev;
+          if (prev.some((m) => m._id?.toString() === newMessage._id?.toString())) return prev;
           return [...prev, newMessage];
         });
 
         // Mark as seen immediately if received from the other user
-        const senderId = newMessage.senderId?._id || newMessage.senderId;
-        if (senderId !== user._id) {
+        const senderId = (newMessage.senderId?._id || newMessage.senderId)?.toString();
+        const currentUserId = userRef.current?._id?.toString();
+        if (senderId && currentUserId && senderId !== currentUserId) {
           socket.emit('message_seen', {
             messageId: newMessage._id,
-            conversationId: activeConversation._id,
+            conversationId: activeConvId,
           });
         }
       }
 
       fetchConversations();
+    };
+
+    const handleNewMessageNotification = ({ conversationId: notifConvId, message: notifMsg }) => {
+      fetchConversations();
+      const activeConv = activeConversationRef.current;
+      const activeConvId = (activeConv?._id || activeConv?.id)?.toString();
+      const msgConvId = (
+        notifConvId?._id ||
+        notifConvId ||
+        notifMsg?.conversationId?._id ||
+        notifMsg?.conversationId
+      )?.toString();
+
+      if (activeConvId && msgConvId === activeConvId && notifMsg) {
+        setPartnerTyping(false);
+        setMessages((prev) => {
+          if (prev.some((m) => m._id?.toString() === notifMsg._id?.toString())) return prev;
+          return [...prev, notifMsg];
+        });
+      }
     };
 
     const handleMessageStatusUpdate = ({ messageId, status, seenAt, expiresAt }) => {
@@ -116,7 +157,7 @@ export default function ChatPage() {
     };
 
     const handleMessageSaved = ({ messageId, savedByUserId }) => {
-      if (savedByUserId !== user._id) {
+      if (savedByUserId !== userRef.current?._id) {
         toast('A participant saved your message (it won’t self-destruct)!', {
           icon: '🔖',
           duration: 4000,
@@ -129,14 +170,26 @@ export default function ChatPage() {
       );
     };
 
-    const handleUserTyping = ({ conversationId, userId }) => {
-      if (activeConversation && conversationId === activeConversation._id && userId !== user._id) {
+    const handleUserTyping = ({ conversationId, userId: typingUserId }) => {
+      const activeConvId = (activeConversationRef.current?._id || activeConversationRef.current?.id)?.toString();
+      const eventConvId = (conversationId?._id || conversationId)?.toString();
+      if (
+        activeConvId &&
+        eventConvId === activeConvId &&
+        typingUserId?.toString() !== userRef.current?._id?.toString()
+      ) {
         setPartnerTyping(true);
       }
     };
 
-    const handleUserStopTyping = ({ conversationId, userId }) => {
-      if (activeConversation && conversationId === activeConversation._id && userId !== user._id) {
+    const handleUserStopTyping = ({ conversationId, userId: typingUserId }) => {
+      const activeConvId = (activeConversationRef.current?._id || activeConversationRef.current?.id)?.toString();
+      const eventConvId = (conversationId?._id || conversationId)?.toString();
+      if (
+        activeConvId &&
+        eventConvId === activeConvId &&
+        typingUserId?.toString() !== userRef.current?._id?.toString()
+      ) {
         setPartnerTyping(false);
       }
     };
@@ -149,10 +202,12 @@ export default function ChatPage() {
       setIsCallOpen(true);
     };
 
+    socket.on('connect', handleConnect);
     socket.on('online_users', handleOnlineUsers);
     socket.on('user_online', handleUserOnline);
     socket.on('user_offline', handleUserOffline);
     socket.on('receive_message', handleReceiveMessage);
+    socket.on('new_message_notification', handleNewMessageNotification);
     socket.on('message_status_update', handleMessageStatusUpdate);
     socket.on('message_saved', handleMessageSaved);
     socket.on('user_typing', handleUserTyping);
@@ -163,38 +218,42 @@ export default function ChatPage() {
     socket.emit('get_online_users');
 
     return () => {
+      socket.off('connect', handleConnect);
       socket.off('online_users', handleOnlineUsers);
       socket.off('user_online', handleUserOnline);
       socket.off('user_offline', handleUserOffline);
       socket.off('receive_message', handleReceiveMessage);
+      socket.off('new_message_notification', handleNewMessageNotification);
       socket.off('message_status_update', handleMessageStatusUpdate);
       socket.off('message_saved', handleMessageSaved);
       socket.off('user_typing', handleUserTyping);
       socket.off('user_stop_typing', handleUserStopTyping);
       socket.off('incoming_call', handleIncomingCall);
     };
-  }, [activeConversation, user._id, fetchConversations]);
+  }, [fetchConversations]);
 
   // ─── 3. Load Active Conversation Messages ───────────────────────────
   useEffect(() => {
-    if (!activeConversation) return;
+    if (!activeConversation?._id) return;
 
-    socket.emit('join_conversation', { conversationId: activeConversation._id });
+    const convId = activeConversation._id;
+    socket.emit('join_conversation', { conversationId: convId });
     setPartnerTyping(false);
 
     const loadMessages = async () => {
       try {
-        const { data } = await api.get(`/conversations/${activeConversation._id}`);
+        const { data } = await api.get(`/conversations/${convId}`);
         const loadedMessages = data.messages || [];
         setMessages(loadedMessages);
 
         // Mark any unseen received messages as seen
+        const currentUserId = user?._id?.toString();
         loadedMessages.forEach((msg) => {
-          const senderId = msg.senderId?._id || msg.senderId;
-          if (senderId !== user._id && msg.status !== 'seen') {
+          const senderId = (msg.senderId?._id || msg.senderId)?.toString();
+          if (senderId && currentUserId && senderId !== currentUserId && msg.status !== 'seen') {
             socket.emit('message_seen', {
               messageId: msg._id,
-              conversationId: activeConversation._id,
+              conversationId: convId,
             });
           }
         });
@@ -206,9 +265,9 @@ export default function ChatPage() {
     loadMessages();
 
     return () => {
-      socket.emit('leave_conversation', { conversationId: activeConversation._id });
+      socket.emit('leave_conversation', { conversationId: convId });
     };
-  }, [activeConversation, user._id]);
+  }, [activeConversation?._id, user?._id]);
 
   // Auto-scroll to latest message
   useEffect(() => {
@@ -249,8 +308,28 @@ export default function ChatPage() {
       setSearchResults([]);
       await fetchConversations();
       setActiveConversation(conv);
+      if (conv?._id) {
+        socket.emit('join_conversation', { conversationId: conv._id });
+      }
     } catch (err) {
       toast.error(err.response?.data?.error || 'Could not start conversation');
+    }
+  };
+
+  // Open or create Nova AI conversation (like WhatsApp Meta AI)
+  const handleOpenNovaChat = async () => {
+    try {
+      const { data } = await api.post('/conversations/nova');
+      const conv = data.conversation || data;
+      setSearchQuery('');
+      setSearchResults([]);
+      await fetchConversations();
+      setActiveConversation(conv);
+      if (conv?._id) {
+        socket.emit('join_conversation', { conversationId: conv._id });
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not open Nova AI');
     }
   };
 
@@ -279,23 +358,41 @@ export default function ChatPage() {
     if (!content || !activeConversation || isSending) return;
 
     setIsSending(true);
+    const convId = activeConversation._id;
+
+    // Ensure conversation room is joined
+    socket.emit('join_conversation', { conversationId: convId });
 
     // Stop typing indicator
-    socket.emit('stop_typing', { conversationId: activeConversation._id });
+    socket.emit('stop_typing', { conversationId: convId });
+
+    // Fallback safety timer so isSending never gets permanently stuck
+    const safetyTimer = setTimeout(() => {
+      setIsSending(false);
+    }, 4000);
 
     socket.emit(
       'send_message',
       {
-        conversationId: activeConversation._id,
+        conversationId: convId,
         content,
         type: 'text',
       },
       (response) => {
+        clearTimeout(safetyTimer);
         setIsSending(false);
         if (response?.error) {
           toast.error(response.error);
         } else {
           setInputMessage('');
+          if (response?.message) {
+            setMessages((prev) => {
+              if (prev.some((m) => m._id?.toString() === response.message._id?.toString())) {
+                return prev;
+              }
+              return [...prev, response.message];
+            });
+          }
         }
       },
     );
@@ -305,20 +402,36 @@ export default function ChatPage() {
   const handleSendVoice = (base64Audio, durationStr) => {
     if (!activeConversation) return;
 
+    const convId = activeConversation._id;
+    socket.emit('join_conversation', { conversationId: convId });
+
+    const safetyTimer = setTimeout(() => {
+      setIsRecordingVoice(false);
+    }, 5000);
+
     socket.emit(
       'send_message',
       {
-        conversationId: activeConversation._id,
+        conversationId: convId,
         type: 'voice',
         voiceUrl: base64Audio,
         content: `Voice note (${durationStr})`,
       },
       (response) => {
+        clearTimeout(safetyTimer);
         setIsRecordingVoice(false);
         if (response?.error) {
           toast.error(response.error);
         } else {
           toast.success('Voice message sent');
+          if (response?.message) {
+            setMessages((prev) => {
+              if (prev.some((m) => m._id?.toString() === response.message._id?.toString())) {
+                return prev;
+              }
+              return [...prev, response.message];
+            });
+          }
         }
       },
     );
@@ -369,7 +482,9 @@ export default function ChatPage() {
   // ─── Helpers ────────────────────────────────────────────────────────
   const getPartner = (conv) => {
     return (
-      conv.participantIds?.find((p) => (p._id || p) !== user._id) || {
+      conv?.participantIds?.find(
+        (p) => (p?._id?.toString() || p?.toString()) !== user?._id?.toString(),
+      ) || {
         username: 'Unknown User',
       }
     );
@@ -389,7 +504,12 @@ export default function ChatPage() {
   };
 
   const activePartner = activeConversation ? getPartner(activeConversation) : null;
-  const isPartnerOnline = activePartner && onlineUsers.has(activePartner._id);
+  const isNovaChat = Boolean(
+    activePartner?.isBot ||
+    activePartner?.username === 'Nova AI' ||
+    activePartner?.inviteCode === 'NOVA',
+  );
+  const isPartnerOnline = isNovaChat || Boolean(activePartner && onlineUsers.has(activePartner._id));
 
   return (
     <div
@@ -467,17 +587,47 @@ export default function ChatPage() {
           )}
         </div>
 
+        {/* Meta AI-style Nova Assistant Quick Launch */}
+        <div
+          className={`${styles.novaBanner} ${isNovaChat ? styles.novaBannerActive : ''}`}
+          onClick={handleOpenNovaChat}
+          title="Chat with Nova AI (powered by Google Gemini with live web search)"
+        >
+          <div className={styles.novaRing}>
+            <div className={styles.novaRingInner}>
+              <span>✨</span>
+            </div>
+          </div>
+          <div className={styles.novaBannerText}>
+            <div className={styles.novaBannerTitle}>
+              <span>Nova</span>
+            </div>
+            <div className={styles.novaBannerSub}>
+              Ask anything
+            </div>
+          </div>
+        </div>
+
         {/* Conversations List */}
         <div className={styles.conversationList}>
           <div className={styles.listHeader}>Conversations</div>
-          {conversations.length === 0 ? (
-            <div className={styles.emptyConversations}>
-              No conversations yet.<br />Search a username above to start chatting!
-            </div>
-          ) : (
-            conversations.map((conv) => {
+          {(() => {
+            const peerConversations = conversations.filter((conv) => {
               const partner = getPartner(conv);
-              const isOnline = partner && onlineUsers.has(partner._id);
+              return !partner?.isBot && partner?.username !== 'Nova AI' && partner?.inviteCode !== 'NOVA';
+            });
+
+            if (peerConversations.length === 0) {
+              return (
+                <div className={styles.emptyConversations}>
+                  No conversations yet.<br />Search a username above to start chatting!
+                </div>
+              );
+            }
+
+            return peerConversations.map((conv) => {
+              const partner = getPartner(conv);
+              const isOnline = Boolean(partner && onlineUsers.has(partner._id));
               const isActive = activeConversation?._id === conv._id;
 
               return (
@@ -495,7 +645,9 @@ export default function ChatPage() {
 
                   <div className={styles.convDetails}>
                     <div className={styles.convTop}>
-                      <span className={styles.convName}>{partner?.username}</span>
+                      <span className={styles.convName}>
+                        {partner?.username}
+                      </span>
                       {conv.lastMessageAt && (
                         <span className={styles.convTime}>
                           {new Date(conv.lastMessageAt).toLocaleTimeString([], {
@@ -520,8 +672,8 @@ export default function ChatPage() {
                   </div>
                 </div>
               );
-            })
-          )}
+            });
+          })()}
         </div>
       </aside>
 
@@ -568,17 +720,31 @@ export default function ChatPage() {
             <div className={styles.chatHeader}>
               <div className={styles.headerUser}>
                 <div className={styles.avatarWrapper}>
-                  <div className={styles.avatar}>
-                    {activePartner?.username?.charAt(0).toUpperCase() || '?'}
-                  </div>
-                  {isPartnerOnline && <div className={styles.onlineDot} />}
+                  {isNovaChat ? (
+                    <div className={styles.novaRing} style={{ width: 44, height: 44, padding: 2.5 }}>
+                      <div className={styles.novaRingInner} style={{ fontSize: '1.2rem' }}>
+                        ✨
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className={styles.avatar}>
+                        {activePartner?.username?.charAt(0).toUpperCase() || '?'}
+                      </div>
+                      {isPartnerOnline && <div className={styles.onlineDot} />}
+                    </>
+                  )}
                 </div>
                 <div>
-                  <div className={styles.headerTitle}>{activePartner?.username}</div>
-                  <div className={`${styles.headerStatus} ${isPartnerOnline ? styles.online : ''}`}>
+                  <div className={styles.headerTitle}>
+                    {activePartner?.username}
+                  </div>
+                  <div className={`${styles.headerStatus} ${isPartnerOnline || isNovaChat ? styles.online : ''}`}>
                     {partnerTyping ? (
-                      <span className={styles.typingText}>typing...</span>
-                    ) : isPartnerOnline ? (
+                      <span className={styles.typingText}>
+                        {isNovaChat ? 'Nova is typing... ✨' : 'typing...'}
+                      </span>
+                    ) : isPartnerOnline || isNovaChat ? (
                       '● Online'
                     ) : (
                       'Offline'
@@ -587,43 +753,47 @@ export default function ChatPage() {
                 </div>
               </div>
 
-              {/* Action Buttons in Header: Voice Call, Video Call, Razorpay Pay */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                <button
-                  type="button"
-                  onClick={() => handleStartCall('audio')}
-                  className={styles.headerActionBtn}
-                  title="Voice Call"
-                >
-                  📞
-                </button>
+              {/* Action Buttons in Header */}
+              {isNovaChat ? null : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => handleStartCall('audio')}
+                    className={styles.headerActionBtn}
+                    title="Voice Call"
+                  >
+                    📞
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => handleStartCall('video')}
-                  className={styles.headerActionBtn}
-                  title="Video Call"
-                >
-                  📹
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => handleStartCall('video')}
+                    className={styles.headerActionBtn}
+                    title="Video Call"
+                  >
+                    📹
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => setIsPaymentModalOpen(true)}
-                  className={styles.headerPayBtn}
-                  title="Send Money via Razorpay"
-                >
-                  <span>💳</span>
-                  <span>Pay ₹</span>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsPaymentModalOpen(true)}
+                    className={styles.headerPayBtn}
+                    title="Send Money via Razorpay"
+                  >
+                    <span>💳</span>
+                    <span>Pay ₹</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Ephemeral Notice Banner (only in regular ephemeral chats) */}
+            {!isNovaChat && (
+              <div className={styles.ephemeralBanner}>
+                <span>🔥</span>
+                <span>Messages self-destruct 15–25 seconds after being read by recipient.</span>
               </div>
-            </div>
-
-            {/* Ephemeral Notice Banner */}
-            <div className={styles.ephemeralBanner}>
-              <span>🔥</span>
-              <span>Messages self-destruct 15–25 seconds after being read by recipient.</span>
-            </div>
+            )}
 
             {/* Messages Scroll Area */}
             <div className={styles.messagesScroll}>
@@ -642,6 +812,11 @@ export default function ChatPage() {
                 messages.map((msg) => {
                   const senderId = msg.senderId?._id || msg.senderId;
                   const isSent = senderId === user._id;
+                  const isNovaMsg = Boolean(
+                    msg.isAi ||
+                    msg.senderId?.isBot ||
+                    msg.senderId?.username === 'Nova AI',
+                  );
                   const remainingSec = formatRemainingSeconds(msg.expiresAt);
 
                   return (
@@ -650,11 +825,48 @@ export default function ChatPage() {
                       className={`${styles.messageRow} ${isSent ? styles.sent : styles.received}`}
                     >
                       <ExpiringMessage
-                        expiresAt={msg.isSaved || msg.type === 'payment' ? null : msg.expiresAt}
+                        expiresAt={
+                          isNovaChat || msg.isSaved || msg.type === 'payment'
+                            ? null
+                            : msg.expiresAt
+                        }
                         onExpired={() => handleMessageExpired(msg._id)}
                       >
-                        {/* ─── Voice Message ─── */}
-                        {msg.type === 'voice' ? (
+                        {/* ─── Nova AI Message ─── */}
+                        {isNovaMsg ? (
+                          <div className={`${styles.messageBubble} ${styles.novaBubble}`}>
+                            {!isNovaChat && (
+                              <div className={styles.novaBubbleHeader}>
+                                <span>✨ Nova</span>
+                              </div>
+                            )}
+                            <FormattedText text={msg.content} />
+
+                            {msg.groundingSources && msg.groundingSources.length > 0 && (
+                              <div className={styles.sourcesContainer}>
+                                <div className={styles.sourcesHeader}>
+                                  <span>🌐 Web Sources:</span>
+                                </div>
+                                <div className={styles.sourcesList}>
+                                  {msg.groundingSources.map((src, sIdx) => (
+                                    <a
+                                      key={sIdx}
+                                      href={src.url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className={styles.sourcePill}
+                                      title={src.title}
+                                    >
+                                      <span>🔗</span>
+                                      <span className={styles.sourceTitle}>{src.title}</span>
+                                      <span>↗</span>
+                                    </a>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ) : msg.type === 'voice' ? (
                           <div className={styles.messageBubble}>
                             <VoicePlayer src={msg.voiceUrl} />
                           </div>
@@ -692,7 +904,7 @@ export default function ChatPage() {
                           </span>
                         )}
 
-                        {remainingSec !== null && !msg.isSaved && msg.type !== 'payment' && (
+                        {!isNovaMsg && !isNovaChat && remainingSec !== null && !msg.isSaved && msg.type !== 'payment' && (
                           <span
                             className={styles.expiryBadge}
                             title="Self-destruct timer counting down"
@@ -701,7 +913,7 @@ export default function ChatPage() {
                           </span>
                         )}
 
-                        {msg.type !== 'payment' &&
+                        {!isNovaMsg && !isNovaChat && msg.type !== 'payment' &&
                           (msg.isSaved ? (
                             <span className={styles.savedBadge} title="Saved in your archive">
                               🔖 Saved
@@ -720,6 +932,31 @@ export default function ChatPage() {
                   );
                 })
               )}
+
+              {/* Typing indicator bubble */}
+              {partnerTyping && (
+                <div className={`${styles.messageRow} ${styles.received}`}>
+                  <div
+                    className={`${styles.messageBubble} ${isNovaChat ? styles.novaBubble : ''}`}
+                    style={{
+                      padding: '0.65rem 1rem',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                    }}
+                  >
+                    <span style={{ fontSize: '0.85rem', color: isNovaChat ? '#c084fc' : 'inherit', fontWeight: 600 }}>
+                      {isNovaChat ? '✨ Nova is thinking & typing' : 'typing'}
+                    </span>
+                    <span className={styles.typingDots}>
+                      <span />
+                      <span />
+                      <span />
+                    </span>
+                  </div>
+                </div>
+              )}
+
               <div ref={messagesEndRef} />
             </div>
 
@@ -733,45 +970,53 @@ export default function ChatPage() {
               </div>
             ) : (
               <form onSubmit={handleSendMessage} className={styles.inputForm}>
-                {/* Razorpay WhatsApp Pay Button */}
-                <button
-                  type="button"
-                  className={styles.headerPayBtn}
-                  onClick={() => setIsPaymentModalOpen(true)}
-                  title="Send Money (WhatsApp Pay / Razorpay)"
-                  style={{ borderRadius: '20px', padding: '0.5rem 0.85rem' }}
-                >
-                  <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>💳 Pay ₹</span>
-                </button>
-
-                {/* Voice Note Button */}
-                <button
-                  type="button"
-                  className={styles.actionBtn}
-                  onClick={() => setIsRecordingVoice(true)}
-                  title="Record Voice Note"
-                >
-                  <svg
-                    width="18"
-                    height="18"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
+                {/* Razorpay WhatsApp Pay Button (hidden in Nova AI chat) */}
+                {!isNovaChat && (
+                  <button
+                    type="button"
+                    className={styles.headerPayBtn}
+                    onClick={() => setIsPaymentModalOpen(true)}
+                    title="Send Money (WhatsApp Pay / Razorpay)"
+                    style={{ borderRadius: '20px', padding: '0.5rem 0.85rem' }}
                   >
-                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                    <line x1="12" y1="19" x2="12" y2="23" />
-                    <line x1="8" y1="23" x2="16" y2="23" />
-                  </svg>
-                </button>
+                    <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>💳 Pay ₹</span>
+                  </button>
+                )}
+
+                {/* Voice Note Button (hidden in Nova AI chat) */}
+                {!isNovaChat && (
+                  <button
+                    type="button"
+                    className={styles.actionBtn}
+                    onClick={() => setIsRecordingVoice(true)}
+                    title="Record Voice Note"
+                  >
+                    <svg
+                      width="18"
+                      height="18"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                      <line x1="12" y1="19" x2="12" y2="23" />
+                      <line x1="8" y1="23" x2="16" y2="23" />
+                    </svg>
+                  </button>
+                )}
 
                 <input
                   type="text"
                   className={styles.messageInput}
-                  placeholder="Send an ephemeral message..."
+                  placeholder={
+                    isNovaChat
+                      ? "Nova"
+                      : "Type a message (or @nova to ask AI)..."
+                  }
                   value={inputMessage}
                   onChange={handleInputChange}
                   disabled={isSending}

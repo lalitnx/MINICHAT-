@@ -32,8 +32,8 @@ let model = null;
 
 if (config.geminiApiKey) {
   genAI = new GoogleGenerativeAI(config.geminiApiKey);
-  // Use gemini-2.0-flash — fast and free-tier friendly
-  model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+  // Use gemini-3.5-flash-lite — fast, lightweight, and free-tier friendly
+  model = genAI.getGenerativeModel({ model: 'gemini-3.5-flash-lite' });
 }
 
 /**

@@ -63,6 +63,11 @@ const userSchema = new mongoose.Schema(
       unique: true,
       default: () => crypto.randomBytes(4).toString('hex'), // 8-char hex string
     },
+
+    isBot: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     // Mongoose auto-creates `createdAt` and `updatedAt` fields

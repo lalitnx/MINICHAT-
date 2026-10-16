@@ -11,6 +11,7 @@ const {
   getConversations,
   createConversation,
   getConversation,
+  getNovaConversation,
 } = require('../controllers/conversationController');
 const authMiddleware = require('../middleware/auth');
 
@@ -18,6 +19,7 @@ router.use(authMiddleware);
 
 router.get('/', getConversations);
 router.post('/', createConversation);
+router.post('/nova', getNovaConversation);
 router.get('/:id', getConversation);
 
 module.exports = router;

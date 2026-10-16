@@ -33,6 +33,7 @@
 const { Message, Conversation } = require('../../models');
 const config = require('../../config');
 const { moderateContent } = require('../../services/moderationService');
+const { getNovaUser, askNova } = require('../../services/novaService');
 
 const registerMessageHandlers = (io, socket, onlineUsers) => {
   const userId = socket.userId;
@@ -115,9 +116,11 @@ const registerMessageHandlers = (io, socket, onlineUsers) => {
         lastMessageAt: new Date(),
       });
 
+      const novaUser = await getNovaUser();
+
       // Populate sender info for the client
       const populatedMessage = await Message.findById(message._id)
-        .populate('senderId', 'username avatarUrl')
+        .populate('senderId', 'username avatarUrl isBot')
         .lean();
 
       // Emit to all users in the conversation room (including sender for confirmation)
@@ -138,10 +141,11 @@ const registerMessageHandlers = (io, socket, onlineUsers) => {
         }
       });
 
-      // Update status to 'delivered' if recipient is online
+      // Update status to 'delivered' if recipient is online or is Nova bot
       conversation.participantIds.forEach((participantId) => {
         const pid = participantId.toString();
-        if (pid !== userId && onlineUsers.has(pid)) {
+        const isBotRecipient = pid === novaUser._id.toString();
+        if (pid !== userId && (onlineUsers.has(pid) || isBotRecipient)) {
           Message.findByIdAndUpdate(message._id, {
             status: 'delivered',
           }).exec();
@@ -154,6 +158,64 @@ const registerMessageHandlers = (io, socket, onlineUsers) => {
 
       // Acknowledge to sender
       callback?.({ success: true, message: populatedMessage });
+
+      // ── Nova AI Trigger (Meta AI style) ──
+      const isNovaConversation = conversation.participantIds.some(
+        (pid) => pid.toString() === novaUser._id.toString(),
+      );
+      const hasNovaMention = type === 'text' && /@nova\b/i.test(content);
+
+      if (isNovaConversation || hasNovaMention) {
+        const prompt = hasNovaMention
+          ? content.replace(/@nova\b/gi, '').trim() || content
+          : content;
+
+        // Emit typing indicator for Nova
+        io.to(`conversation:${conversationId}`).emit('user_typing', {
+          conversationId,
+          userId: novaUser._id.toString(),
+        });
+
+        // Generate Nova AI response asynchronously
+        (async () => {
+          try {
+            const novaMessage = await askNova({
+              conversationId,
+              prompt,
+              senderId: userId,
+            });
+
+            // Stop Nova typing indicator
+            io.to(`conversation:${conversationId}`).emit('user_stop_typing', {
+              conversationId,
+              userId: novaUser._id.toString(),
+            });
+
+            // Broadcast Nova's response to the conversation room
+            io.to(`conversation:${conversationId}`).emit(
+              'receive_message',
+              novaMessage,
+            );
+
+            // Notify participants outside the active chat room
+            conversation.participantIds.forEach((participantId) => {
+              const pid = participantId.toString();
+              if (pid !== novaUser._id.toString()) {
+                io.to(`user:${pid}`).emit('new_message_notification', {
+                  conversationId,
+                  message: novaMessage,
+                });
+              }
+            });
+          } catch (novaErr) {
+            console.error('Nova AI processing error:', novaErr.message);
+            io.to(`conversation:${conversationId}`).emit('user_stop_typing', {
+              conversationId,
+              userId: novaUser._id.toString(),
+            });
+          }
+        })();
+      }
     } catch (error) {
       console.error('send_message error:', error.message);
       callback?.({ error: 'Failed to send message.' });
@@ -176,6 +238,17 @@ const registerMessageHandlers = (io, socket, onlineUsers) => {
 
       // Only the recipient (not the sender) triggers "seen"
       if (message.senderId.toString() === userId) return;
+
+      // Messages in 1-on-1 Nova chat do not self-destruct; but in peer chats, AI messages expire normally
+      const novaUser = await getNovaUser();
+      const currentConvo = await Conversation.findById(conversationId);
+      const isNovaDirectChat =
+        currentConvo &&
+        !currentConvo.isGroup &&
+        currentConvo.participantIds.some(
+          (pid) => pid.toString() === novaUser._id.toString(),
+        );
+      if (isNovaDirectChat) return;
 
       // Don't re-process already-seen messages
       if (message.status === 'seen') return;
@@ -229,10 +302,18 @@ const registerMessageHandlers = (io, socket, onlineUsers) => {
         status: { $ne: 'seen' },
       });
 
-      const now = new Date();
-      const { baseDelayMs, jitterMinMs, jitterMaxMs } = config.messageExpiry;
+      const novaUser = await getNovaUser();
+      const currentConvo = await Conversation.findById(conversationId);
+      const isNovaDirectChat =
+        currentConvo &&
+        !currentConvo.isGroup &&
+        currentConvo.participantIds.some(
+          (pid) => pid.toString() === novaUser._id.toString(),
+        );
 
       for (const message of unseenMessages) {
+        if (message.isAi && isNovaDirectChat) continue;
+
         const jitter =
           Math.floor(Math.random() * (jitterMaxMs - jitterMinMs + 1)) + jitterMinMs;
         const expiresAt = new Date(now.getTime() + baseDelayMs + jitter);

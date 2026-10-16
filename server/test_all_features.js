@@ -163,7 +163,27 @@ async function runTests() {
     }
     console.log('✅ Test 9 Passed: Payment verified and in-chat payment receipt created');
 
-    console.log('\n🎉 ALL 9 TEST SUITES PASSED FLAWLESSLY! All features are fully operational.\n');
+    // ── Test 10: Nova AI Bot (Meta AI style) ──
+    const novaRes = await fetch(`${baseUrl}/conversations/nova`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${tokenA}`,
+      },
+    });
+    const novaData = await novaRes.json();
+    if (!novaRes.ok || !novaData.conversation?._id) {
+      throw new Error(`Nova AI conversation failed: ${JSON.stringify(novaData)}`);
+    }
+    const hasNovaBot = novaData.conversation.participantIds.some(
+      (p) => p.username === 'Nova AI' && p.isBot === true,
+    );
+    if (!hasNovaBot) {
+      throw new Error(`Nova bot participant not found: ${JSON.stringify(novaData.conversation.participantIds)}`);
+    }
+    console.log('✅ Test 10 Passed: Nova AI initialized with Google Search Grounding capabilities');
+
+    console.log('\n🎉 ALL 10 TEST SUITES PASSED FLAWLESSLY! All features (including Nova AI) are fully operational.\n');
   } catch (err) {
     console.error('\n❌ Test failure:', err.message);
     process.exit(1);

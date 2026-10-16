@@ -7,7 +7,11 @@
  * for development, and catch missing values early.
  */
 
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({
+  path: path.resolve(__dirname, '../.env'),
+  override: true,
+});
 
 const config = {
   // Server
@@ -23,8 +27,13 @@ const config = {
   // CORS — which frontend origin is allowed to call the API
   clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
 
-  // Google Gemini API
-  geminiApiKey: process.env.GEMINI_API_KEY || '',
+  // Google Gemini API (ignore dummy template placeholder values)
+  geminiApiKey:
+    process.env.GEMINI_API_KEY &&
+    process.env.GEMINI_API_KEY !== 'YOUR_REAL_API_KEY' &&
+    process.env.GEMINI_API_KEY !== 'your-gemini-api-key'
+      ? process.env.GEMINI_API_KEY
+      : '',
 
   // Razorpay API (In-app payments / WhatsApp Pay style)
   razorpayKeyId: process.env.RAZORPAY_KEY_ID || 'rzp_test_placeholder',

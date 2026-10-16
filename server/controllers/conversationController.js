@@ -15,6 +15,7 @@
  */
 
 const { Conversation, Message, User } = require('../models');
+const { getOrCreateNovaConversation } = require('../services/novaService');
 const mongoose = require('mongoose');
 
 /**
@@ -30,7 +31,7 @@ const getConversations = async (req, res) => {
     const conversations = await Conversation.find({
       participantIds: userId,
     })
-      .populate('participantIds', 'username avatarUrl inviteCode') // Populate user info
+      .populate('participantIds', 'username avatarUrl inviteCode isBot') // Populate user info
       .sort({ lastMessageAt: -1 }) // Newest first
       .lean(); // Return plain objects (faster, no Mongoose overhead)
 
@@ -102,7 +103,7 @@ const createConversation = async (req, res) => {
         $size: 2,
       },
       isGroup: false,
-    }).populate('participantIds', 'username avatarUrl inviteCode');
+    }).populate('participantIds', 'username avatarUrl inviteCode isBot');
 
     if (existingConversation) {
       return res.json({
@@ -120,7 +121,7 @@ const createConversation = async (req, res) => {
     // Populate participant info before returning
     const populated = await Conversation.findById(conversation._id).populate(
       'participantIds',
-      'username avatarUrl inviteCode',
+      'username avatarUrl inviteCode isBot',
     );
 
     res.status(201).json({
@@ -153,7 +154,7 @@ const getConversation = async (req, res) => {
     const conversation = await Conversation.findOne({
       _id: id,
       participantIds: userId, // Security: user must be a participant
-    }).populate('participantIds', 'username avatarUrl inviteCode');
+    }).populate('participantIds', 'username avatarUrl inviteCode isBot');
 
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found.' });
@@ -174,7 +175,7 @@ const getConversation = async (req, res) => {
     const messages = await Message.find(messageQuery)
       .sort({ createdAt: -1 })
       .limit(50)
-      .populate('senderId', 'username avatarUrl')
+      .populate('senderId', 'username avatarUrl isBot')
       .lean();
 
     messages.reverse(); // Oldest first for chat display
@@ -189,4 +190,23 @@ const getConversation = async (req, res) => {
   }
 };
 
-module.exports = { getConversations, createConversation, getConversation };
+/**
+ * POST /api/conversations/nova — Get or create conversation with Nova AI bot
+ */
+const getNovaConversation = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const conversation = await getOrCreateNovaConversation(userId);
+    res.json({ conversation });
+  } catch (error) {
+    console.error('GetNovaConversation error:', error.message);
+    res.status(500).json({ error: 'Failed to access Nova AI conversation.' });
+  }
+};
+
+module.exports = {
+  getConversations,
+  createConversation,
+  getConversation,
+  getNovaConversation,
+};
